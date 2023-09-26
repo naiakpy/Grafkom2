@@ -1,0 +1,209 @@
+<!DOCTYPE HTML>
+<html lang="en">
+
+<head>
+    <title>Skybox Model Viewer</title>
+    <meta charset="utf-8">
+</head>
+
+
+<script id="shader-vs" type="x-shader/x-vertex">
+   attribute vec4 aVertexPosition;
+   attribute vec3 aVertexNormal;
+   attribute vec2 aTexCoord;
+   
+    uniform mat4 uMVMatrix;
+    uniform mat4 uPMatrix;
+    uniform bool vsSkybox; //true if we're drawing the skybox, false if the teapot
+    
+   varying vec4 vVertexPosition;
+   varying vec3 vVertexNormal;
+   varying vec2 vTexCoord;
+
+    void main(void) {
+        if(vsSkybox) {
+            vVertexNormal = vec3(0.0, 0.0, 0.0); //garbage to stop compiler complaining
+            vTexCoord = aTexCoord;
+        } else {
+            vVertexNormal = aVertexNormal;
+            //vTexCoord = vec2(0.0, 0.0); //garbage to stop compiler complaining
+            vTexCoord = aTexCoord; //TEMP
+        }
+        vVertexPosition = aVertexPosition;
+        gl_Position = uPMatrix*uMVMatrix*aVertexPosition;
+    }
+</script>
+
+<script id="shader-fs" type="x-shader/x-fragment">
+precision highp float;
+ 
+varying vec4 vVertexPosition;
+varying vec3 vVertexNormal;
+varying vec2 vTexCoord; // Texture (u, v) coordinates
+ 
+uniform sampler2D uSampler; //texture
+uniform samplerCube uCubeSampler; //cube map texture (only for reflection mapping)
+uniform bool fsSkybox; //true if we're drawing the skybox, false if the teapot
+uniform bool reflectionMapping; //true if we're doing reflection mapping on everything other than the skybox; false if normal shading
+uniform bool reflectionBlending; //true if when we do reflection mapping we should blend the reflection with the underlying object shading
+
+    uniform mat4 fs_uMVMatrix;
+    uniform mat3 uNMatrix;
+    uniform mat3 rotYMatrix;
+    uniform vec3 uLightPosition;
+    uniform vec3 uAmbientLightColor;
+    uniform vec3 uDiffuseLightColor;
+    uniform vec3 uSpecularLightColor;
+    
+    const float shininess = 100.0;//2.0;
+ 
+void main() {
+    if(fsSkybox) {
+        gl_FragColor = texture2D(uSampler, vTexCoord);
+    } else {
+        // Get the vertex position in eye coordinates
+        vec4 vertexPositionEye4 = fs_uMVMatrix * vVertexPosition;
+        vec3 vertexPositionEye3 = vertexPositionEye4.xyz / vertexPositionEye4.w;
+        
+        // Calculate the vector (l) to the light source
+        vec3 vectorToLightSource = normalize(uLightPosition - vertexPositionEye3);
+        
+        // Transform the normal (n) to eye coordinates
+        vec3 normalEye = normalize(uNMatrix * vVertexNormal);
+        
+        // Calculate n dot l for diffuse lighting
+        float diffuseLightWeightning = max(dot(normalEye, vectorToLightSource), 0.0);
+                                           
+        // Calculate the reflection vector (r) that is needed for specular light
+        vec3 reflectionVector = normalize(reflect(-vectorToLightSource, normalEye));
+        
+        // The camera in eye coordinates is located in the origin and is pointing
+        // along the negative z-axis. Calculate viewVector (v) 
+        // in eye coordinates as:
+        // (0.0, 0.0, 0.0) - vertexPositionEye3
+        vec3 viewVectorEye = -normalize(vertexPositionEye3);
+        
+        float rdotv = max(dot(reflectionVector, viewVectorEye), 0.0);
+        
+        float specularLightWeightning = pow(rdotv, shininess);
+               
+        // Sum up all three reflection components
+        vec4 shadingColor = vec4((uAmbientLightColor
+                + uDiffuseLightColor * diffuseLightWeightning
+                + uSpecularLightColor * specularLightWeightning),1.0);
+        
+        if(reflectionMapping) {
+            vec4 N = fs_uMVMatrix * vec4(vVertexNormal, 0.0);
+            vec3 R = reflect(vertexPositionEye4.xyz, N.xyz);
+            R = rotYMatrix * R;
+            //gl_FragColor = textureCube(uCubeSampler,R);
+            vec4 reflectionColor = textureCube(uCubeSampler,R);
+            
+            if(reflectionBlending) {
+                gl_FragColor = mix(reflectionColor, shadingColor, 0.3);
+            } else {
+                gl_FragColor = reflectionColor;
+            }
+        } else {
+            gl_FragColor = shadingColor;
+        }
+        
+    }
+}
+</script>
+
+<script src="gl-matrix-min.js"></script>
+<script type="text/javascript" src="webgl-utils.js"></script>
+<script src="mp3A.js"></script>
+<script src="objParse.js"></script>
+<style>
+    columnLeft {
+        float: left;
+        text-align: left;
+        max-width: 160px;
+        margin: 0;
+        padding: 1em;
+        line-height: 28px;
+    }
+
+    columnRight {
+        float: right;
+        text-align: left;
+        max-width: 160px;
+        margin: 0;
+        padding: 1em;
+        line-height: 28px;
+    }
+
+    input[type=number] {
+        width: 39px;
+        padding-left: 1px;
+    }
+
+    input[type=color] {
+        width: 25px;
+        height: 20px;
+        margin-left: 6px;
+        margin-right: 6px;
+    }
+
+    label {
+        padding-right: 25px;
+
+    }
+</style>
+
+<body onload="startup();">
+    <columnLeft>
+
+        <body text="black">
+            <h2>Controls</h2>
+            <p> A, ← : Orbit mesh left</p>
+            <p> D, → : Orbit mesh right</p>
+            <p> W : Move up</p>
+            <p> S : Move down</p>
+            <p> ↑ : Look up</p>
+            <p> ↓ : Look down</p>
+            <p> Click & Drag : Rotate mesh</p>
+        </body>
+    </columnLeft>
+    <columnRight>
+
+        <body text="black">
+            <h2>Mesh</h2>
+            <p>Select a mesh (.obj file) to display:</p>
+        </body>
+        <form id="meshInputList">
+        </form>
+        <br>
+        <label>
+            <input type="button" value="Refresh" id="btnRefresh">
+        </label>
+    </columnRight>
+    <div class="wrapper" style="margin: 0 auto; width: 850px; position: relative;">
+        <canvas id="myGLCanvas" width="850" height="550"></canvas>
+        <form id="input_form">
+            <fieldset>
+                <legend>Rendering Parameters</legend>
+                <label>
+                    Scale <input type="number" id="scale" min="0" value="100">%
+                </label>
+                <label>
+                    <input type="checkbox" name="reflect" id="reflect" checked> Environment Reflections
+                </label>
+                <label>
+                    <input type="checkbox" name="reflectBlend" id="reflectBlend"> Reflection Blending
+                </label>
+                <label id="meshColor_lbl" style="display:none;">
+                    <input type="color" name="meshColor" id="meshColor" value="#ff0000"><span id="meshColor_text">Mesh
+                        Color</span>
+                </label>
+                <label>
+                    <input type="checkbox" name="spinnyWorld" id="spinnyWorld"> Spinny World
+                </label>
+            </fieldset>
+        </form>
+    </div>
+</body>
+
+</html>
